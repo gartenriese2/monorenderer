@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
 	<title>Demo</title>
-	<width>1920</width>
-	<height>1080</height>
+	<width>800</width>
+	<height>800</height>
 </config>

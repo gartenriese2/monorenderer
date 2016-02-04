@@ -1,0 +1,333 @@
+#version 450 core
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) restrict writeonly buffer SSBO {
+	vec4 outp[];
+};
+
+layout(std430, binding = 1) restrict readonly buffer Vertices {
+	vec4 vertex[];
+};
+layout(std430, binding = 2) restrict readonly buffer Normals {
+	vec4 normals[];
+};
+layout(std430, binding = 3) restrict readonly buffer Colors {
+	vec4 colors[];
+};
+
+layout(std430, binding = 4) restrict readonly buffer Lights {
+	vec4 lights[];
+};
+
+uniform uint numTris;
+uniform uint numLights;
+uniform vec3 eyePos;
+uniform uvec2 screenDim;
+uniform uint maxDepth;
+
+struct Ray {
+	vec3 pos;
+	vec3 dir;
+	uint depth;
+};
+
+struct Tri {
+	vec3 v0, v1, v2;
+};
+
+struct Isct {
+	vec3 pos;
+	uint index;
+};
+
+bool hasIntersection(Ray ray, Tri tri, out float t) {
+	vec3 v0 = tri.v0;
+	vec3 v1 = tri.v1;
+	vec3 v2 = tri.v2;
+
+	vec3 e1 = v1 - v0;
+	vec3 e2 = v2 - v0;
+
+	vec3 h = cross(ray.dir, e2);
+	float a = dot(e1, h);
+	if (abs(a) < 0.00001)
+		return false;
+
+	float f = 1.f / a;
+
+	vec3 s = ray.pos - v0;
+	float u = f * dot(s, h);
+	if (u < 0. || u > 1.)
+		return false;
+
+	vec3 q = cross(s, e1);
+	float v = f * dot(ray.dir, q);
+
+	if (v < 0. || u + v > 1.)
+		return false;
+
+	t = f * dot(e2, q);
+	if (t > 0.00001)
+		return true;
+
+	return false;
+}
+
+vec3 fresnelSchlick(vec3 c_spec, vec3 l, vec3 h) {
+	return c_spec + (vec3(1, 1, 1) - c_spec) * pow((1 - dot(l, h)), 5);
+}
+
+bool isInShadow(vec3 pos, vec3 lightPos) {
+	Ray ray;
+	ray.pos = pos;
+	ray.dir = lightPos - pos;
+
+	for (uint i = 0; i < numTris; i++) {
+		Tri tri;
+		tri.v0 = vertex[i * 3].xyz;
+		tri.v1 = vertex[i * 3 + 1].xyz;
+		tri.v2 = vertex[i * 3 + 2].xyz;
+
+		float t = 0.;
+		bool hasIsct = hasIntersection(ray, tri, t);
+		if (hasIsct && t < 1.) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+#define M_PI 3.1415926535897932384626433832795
+vec3 fLambert(vec3 c_diff) {
+	return c_diff / M_PI;
+}
+
+float getLightEnergy(float lightPower, vec3 normal, vec3 posToLight) {
+	float cosAngle = dot(normal, posToLight); // [-1;1]
+	cosAngle = max(cosAngle, 0); // [0;1]
+	float len = length(posToLight);
+	return lightPower * cosAngle / (4 * M_PI * len * len);
+}
+
+bool getIntersection(Ray ray, out Isct isct) {
+	isct.pos = vec3(0,0,0);
+	isct.index = 0;
+
+	float t = 0;
+	uint num = 0;
+	for (uint i = 0; i < numTris; i++) {
+		Tri tri;
+		tri.v0 = vertex[i * 3].xyz;
+		tri.v1 = vertex[i * 3 + 1].xyz;
+		tri.v2 = vertex[i * 3 + 2].xyz;
+
+		float tmp = 0.f;
+		bool hasIsct = hasIntersection(ray, tri, tmp);
+		if (hasIsct && (tmp < t || t == 0.f)) {
+			t = tmp;
+			num = i * 3;
+		}
+	}
+
+	if (t > 0) {
+		isct.pos = ray.pos + t * ray.dir;
+		isct.index = num;
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ *	How much energy is reflected from a given incoming direction w_i to a given outgoing direction w_o
+ */
+vec3 BRDF(Isct isct, vec3 w_o, vec3 w_i) {
+	return colors[isct.index].xyz;
+}
+
+/*
+ *	Point light
+ */
+vec3 Sample_L(vec3 lightPos, vec3 p, out vec3 w_i, out float pdf) {
+	w_i = normalize(lightPos - p);
+	pdf = 1;
+	return vec3(1,1,1);
+}
+
+/*
+ *	Perfect reflection
+ */
+vec3 Sample_f(vec3 w_o, vec3 n, out vec3 w_i, out float pdf) {
+	w_i = normalize(reflect(-w_o, n));
+	pdf = 1;
+	return vec3(0.5, 0.5, 0.5);
+}
+
+vec3 Li_2(Ray ray, Isct isct) {
+	vec3 L = vec3(0,0,0);
+
+	vec3 p = isct.pos;
+	vec3 n = normals[isct.index].xyz;
+	vec3 w_o = -ray.dir;
+
+	// Add contribution from each light source
+	for (uint i = 0; i < numLights; i++) {
+		vec3 w_i;
+		float pdf; // is 1 for point lights
+		vec3 lightPos = lights[i].xyz;
+
+		vec3 Li = Sample_L(lightPos, p, w_i, pdf);
+		if (Li == vec3(0,0,0) || pdf == 0)
+			continue;
+
+		vec3 f = BRDF(isct, w_o, w_i);
+		if (f != vec3(0,0,0) && !isInShadow(p, lightPos)) {
+			L += f * Li * abs(dot(w_i, n)) / pdf;
+		}
+	}
+
+	// if (ray.depth + 1 < maxDepth) {
+	// 	L += SpecularReflect_1(ray, p, n);
+	// }
+
+	return L;
+}
+
+vec3 SpecularReflect_1(Ray ray, vec3 p, vec3 n) {
+	vec3 w_o = -ray.dir;
+	vec3 w_i;
+	float pdf;
+
+	vec3 f = Sample_f(w_o, n, w_i, pdf);
+	vec3 L = vec3(0,0,0);
+	if (pdf > 0 && f != vec3(0,0,0) && abs(dot(w_i, n)) != 0) {
+		Ray nRay;
+		nRay.pos = p + 0.00001 * n;
+		nRay.dir = w_i;
+		nRay.depth = ray.depth + 1;
+		Isct isct;
+		if (getIntersection(nRay, isct)) {
+			vec3 Li = Li_2(nRay, isct);
+			L = f * Li * abs(dot(w_i, n)) / pdf;
+		}
+	}
+	return L;
+}
+
+vec3 Li_1(Ray ray, Isct isct) {
+	vec3 L = vec3(0,0,0);
+
+	vec3 p = isct.pos;
+	vec3 n = normals[isct.index].xyz;
+	vec3 w_o = -ray.dir;
+
+	// Add contribution from each light source
+	for (uint i = 0; i < numLights; i++) {
+		vec3 w_i;
+		float pdf; // is 1 for point lights
+		vec3 lightPos = lights[i].xyz;
+
+		vec3 Li = Sample_L(lightPos, p, w_i, pdf);
+		if (Li == vec3(0,0,0) || pdf == 0)
+			continue;
+
+		vec3 f = BRDF(isct, w_o, w_i);
+		if (f != vec3(0,0,0) && !isInShadow(p, lightPos)) {
+			L += f * Li * abs(dot(w_i, n)) / pdf;
+		}
+	}
+
+	if (ray.depth + 1 < maxDepth) {
+		L += SpecularReflect_1(ray, p, n);
+	}
+
+	return L;
+}
+
+vec3 SpecularReflect_0(Ray ray, vec3 p, vec3 n) {
+	vec3 w_o = -ray.dir;
+	vec3 w_i;
+	float pdf;
+
+	vec3 f = Sample_f(w_o, n, w_i, pdf);
+	vec3 L = vec3(0,0,0);
+	if (pdf > 0 && f != vec3(0,0,0) && abs(dot(w_i, n)) != 0) {
+		Ray nRay;
+		nRay.pos = p + 0.00001 * n;
+		nRay.dir = w_i;
+		nRay.depth = ray.depth + 1;
+		Isct isct;
+		if (getIntersection(nRay, isct)) {
+			vec3 Li = Li_1(nRay, isct);
+			L = f * Li * abs(dot(w_i, n)) / pdf;
+		}
+	}
+	return L;
+}
+
+/*
+ *	returns radiance along a ray
+ */
+vec3 Li_0(Ray ray, Isct isct) {
+	vec3 L = vec3(0,0,0);
+
+	vec3 p = isct.pos;
+	vec3 n = normals[isct.index].xyz;
+	vec3 w_o = -ray.dir;
+
+	// Add contribution from each light source
+	for (uint i = 0; i < numLights; i++) {
+		vec3 w_i;
+		float pdf; // is 1 for point lights
+		vec3 lightPos = lights[i].xyz;
+
+		vec3 Li = Sample_L(lightPos, p, w_i, pdf);
+		if (Li == vec3(0,0,0) || pdf == 0)
+			continue;
+
+		vec3 f = BRDF(isct, w_o, w_i);
+		if (f != vec3(0,0,0) && !isInShadow(p, lightPos)) {
+			L += f * Li * abs(dot(w_i, n)) / pdf;
+		}
+	}
+
+	if (ray.depth + 1 < maxDepth) {
+		L += SpecularReflect_0(ray, p, n);
+	}
+
+	return L;
+}
+
+void main() {
+	uvec3 globalID = gl_GlobalInvocationID;
+	vec3 rayDir = normalize(vec3(float(globalID.x) / 80. - 5., float(globalID.y) / 80. - 5., -10.));
+	// vec3 rayDir0 = vec3((float(globalID.x) + 0.25) / 96. - 10., (float(globalID.y) + 0.25) / 54. - 10., -10.);
+	// vec3 rayDir1 = vec3((float(globalID.x) + 0.25) / 96. - 10., (float(globalID.y) - 0.25) / 54. - 10., -10.);
+	// vec3 rayDir2 = vec3((float(globalID.x) - 0.25) / 96. - 10., (float(globalID.y) + 0.25) / 54. - 10., -10.);
+	// vec3 rayDir3 = vec3((float(globalID.x) - 0.25) / 96. - 10., (float(globalID.y) - 0.25) / 54. - 10., -10.);
+	
+	Ray eyeRay;// eyeRay0, eyeRay1, eyeRay2, eyeRay3;
+	eyeRay.pos = eyePos;
+	eyeRay.dir = rayDir;
+	eyeRay.depth = 0;
+	// eyeRay0.pos = eyePos;
+	// eyeRay0.dir = rayDir0;
+	// eyeRay1.pos = eyePos;
+	// eyeRay1.dir = rayDir1;
+	// eyeRay2.pos = eyePos;
+	// eyeRay2.dir = rayDir2;
+	// eyeRay3.pos = eyePos;
+	// eyeRay3.dir = rayDir3;
+
+	vec3 outColor = vec3(0,0,0);
+
+	Isct isct;
+	if (getIntersection(eyeRay, isct)) {
+		outColor = Li_0(eyeRay, isct);
+	}
+	
+	outp[globalID.y * screenDim.x + globalID.x] = vec4(outColor, 1.);
+
+}

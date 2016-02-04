@@ -4,7 +4,7 @@ namespace renderer {
 
 Renderer::Renderer(const std::string & path)
   : m_configReader{new ConfigReader(path)},
-  	m_engine{m_configReader->getSize(), m_configReader->getTitle()}
+  	m_engine{m_configReader->getSize(), m_configReader->getTitle(), true}
 {
 
 }
