@@ -146,12 +146,80 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -isystem ${CONTRIB_DIR}/glm")
 add_definitions( -DGLM_FORCE_RADIANS )
 
 #--------------------------------------------------------------------
+# ASSIMP
+#--------------------------------------------------------------------
+set(ASSIMP_DOWNLOAD_DIR "${PROJECT_SOURCE_DIR}/dl" CACHE STRING "specifies the ASSIMP download directory")
+set(ASSIMP_DOWNLOAD_FILE "v3.2.zip")
+if (EXISTS ${ASSIMP_DOWNLOAD_DIR}/${ASSIMP_DOWNLOAD_FILE})
+	set(ASSIMP_URL "${ASSIMP_DOWNLOAD_DIR}/${ASSIMP_DOWNLOAD_FILE}")
+else ()
+	set(ASSIMP_URL "https://github.com/assimp/assimp/archive/${ASSIMP_DOWNLOAD_FILE}")
+endif ()
+
+set(ASSIMP_LIB_NAME "libassimp.a")
+
+set(ASSIMP_BUILD_DIR "${PROJECT_SOURCE_DIR}/build/assimp")
+set(ASSIMP_DIR "${PROJECT_SOURCE_DIR}/contrib/assimp")
+set(ASSIMP_SOURCE_DIR 		"${ASSIMP_BUILD_DIR}/source")
+set(ASSIMP_INCLUDE_DIR 		"${ASSIMP_DIR}/include")
+set(ASSIMP_CODE_DIR 		"${ASSIMP_DIR}/code")
+set(ASSIMP_LIB_INSTALL_DIR 	"${ASSIMP_BUILD_DIR}/libinstall")
+set(ASSIMP_LIB_DIR 			"${ASSIMP_DIR}/lib")
+
+ExternalProject_Add(
+	assimp
+	PREFIX "contrib"
+	DOWNLOAD_DIR ${ASSIMP_DOWNLOAD_DIR}
+	URL ${ASSIMP_URL}
+	SOURCE_DIR ${ASSIMP_SOURCE_DIR}
+	BINARY_DIR ${ASSIMP_LIB_INSTALL_DIR}
+	INSTALL_DIR ${ASSIMP_DIR}
+	CMAKE_ARGS -DBUILD_SHARED_LIBS=OFF -DASSIMP_NO_EXPORT=ON -DASSIMP_BUILD_ASSIMP_TOOLS=OFF -DASSIMP_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/assimp
+	INSTALL_COMMAND make
+)
+ExternalProject_Add_Step(
+	assimp
+	createFolders
+	WORKING_DIRECTORY ${ASSIMP_DIR}
+	DEPENDEES install
+	COMMAND mkdir -p lib include/assimp code
+	COMMENT "Creating Assimp folders"
+)
+ExternalProject_Add_Step(
+	assimp
+	copySource
+	WORKING_DIRECTORY ${ASSIMP_DIR}
+	DEPENDEES createFolders
+	COMMAND ${CMAKE_COMMAND} -E copy_directory ${ASSIMP_SOURCE_DIR}/include ${ASSIMP_INCLUDE_DIR}
+	COMMENT "Moving Assimp includes"
+)
+ExternalProject_Add_Step(
+	assimp
+	copyLib
+	WORKING_DIRECTORY ${ASSIMP_DIR}
+	DEPENDEES createFolders
+	COMMAND mv ${ASSIMP_LIB_INSTALL_DIR}/code/${ASSIMP_LIB_NAME} ${ASSIMP_LIB_DIR}
+	COMMENT "Moving Assimp lib"
+)
+ExternalProject_Add_Step(
+	assimp
+	copyCode
+	WORKING_DIRECTORY ${ASSIMP_DIR}
+	DEPENDEES createFolders
+	COMMAND ${CMAKE_COMMAND} -E copy_directory ${ASSIMP_SOURCE_DIR}/code ${ASSIMP_CODE_DIR}
+	COMMENT "Moving Assimp code"
+)
+set(ASSIMP_STATIC_LIB "${ASSIMP_LIB_DIR}/${ASSIMP_LIB_NAME}")
+include_directories(${ASSIMP_INCLUDE_DIR})
+set(ASSIMP_LIBRARIES "-lz")
+
+#--------------------------------------------------------------------
 # Building
 #--------------------------------------------------------------------
 if (STATIC_LIB)
 	add_library(monoRenderer STATIC ${SRCS} ${HDRS})
 else ()
 	add_executable(monoRenderer ${SRCS} ${HDRS})
-	target_link_libraries(monoRenderer ${MONOENGINE_STATIC_LIB} ${GLFW_STATIC_LIB} ${OPENGL_gl_LIBRARY} ${GLFW_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+	target_link_libraries(monoRenderer ${MONOENGINE_STATIC_LIB} ${GLFW_STATIC_LIB} ${ASSIMP_STATIC_LIB} ${ASSIMP_LIBRARIES} ${OPENGL_gl_LIBRARY} ${GLFW_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 endif ()
-add_dependencies(monoRenderer MonoEngine)
+add_dependencies(monoRenderer MonoEngine assimp)

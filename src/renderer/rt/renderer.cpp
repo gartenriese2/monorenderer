@@ -17,7 +17,8 @@ Renderer::Renderer()
 	m_vao{"ssq vao"},
 	m_vbo{"ssq vbo"},
 	m_ssbo{"ssbo"},
-	m_lightBuffer{"lights"}
+	m_lightBuffer{"lights"},
+	m_hasTraced{false}
 {
 	gl::Shader isctShader("shader/rt/whitted.comp", "isct_comp");
 	m_isctProg.attachShader(isctShader);
@@ -57,21 +58,32 @@ void Renderer::add(const Object & object) {
 }
 
 void Renderer::render() {
-	m_gpuTimer.start();
+	
 
-	m_isctProg.use();
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_buffer.getVertexBuffer());
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_buffer.getNormalBuffer());
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_buffer.getColorBuffer());
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_lightBuffer);
-	m_isctProg["numTris"] = m_buffer.getNumTriangles();
-	m_isctProg["numLights"] = 1u;//static_cast<unsigned int>(m_lightBuffer.getSize() / 4 / sizeof(float));
-	m_isctProg["eyePos"] = glm::vec3{0.f, 0.f, 10.f};
-	m_isctProg["screenDim"] = glm::uvec2{screenWidth, screenHeight};
-	m_isctProg["maxDepth"] = 2u;
-	glDispatchCompute(screenWidth / 8, screenHeight / 8, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	if (!m_hasTraced) {
+
+		m_gpuTimer.start();
+
+		m_isctProg.use();
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_ssbo);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_buffer.getVertexBuffer());
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_buffer.getNormalBuffer());
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_buffer.getColorBuffer());
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_lightBuffer);
+		m_isctProg["numTris"] = m_buffer.getNumTriangles();
+		m_isctProg["numLights"] = 1u;//static_cast<unsigned int>(m_lightBuffer.getSize() / 4 / sizeof(float));
+		m_isctProg["eyePos"] = glm::vec3{0.f, 0.f, 10.f};
+		m_isctProg["screenDim"] = glm::uvec2{screenWidth, screenHeight};
+		m_isctProg["maxDepth"] = 2u;
+		glDispatchCompute(screenWidth / 8, screenHeight / 8, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		m_hasTraced = true;
+
+		auto t {m_gpuTimer.stop()};
+		LOG("GPU Time in ms: " + std::to_string(static_cast<double>(t) / 1000000.));
+
+	}
 
 	// {
 	//  	GLfloat * ptr = static_cast<GLfloat *>(m_buffer.getNormalBuffer().map(0, 24 * sizeof(GLfloat), GL_MAP_READ_BIT));
@@ -92,9 +104,6 @@ void Renderer::render() {
 	m_vao.bind();
 	m_ssqProg["width"] = screenWidth;
 	glDrawArrays(GL_TRIANGLES, 0, 6);
-
-	auto t {m_gpuTimer.stop()};
-	LOG("GPU Time in ms: " + std::to_string(static_cast<double>(t) / 1000000.));
 }
 
 } // namespace rt

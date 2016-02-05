@@ -31,6 +31,8 @@ class Renderer {
 		gl::Buffer m_lightBuffer;
 
 		gl::Timer m_gpuTimer;
+
+		bool m_hasTraced;
 };
 
 } // namespace rt
